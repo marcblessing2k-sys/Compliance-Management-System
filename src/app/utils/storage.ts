@@ -74,6 +74,35 @@ function getClient() {
   return requireSupabase();
 }
 
+async function assertEmployeeInBusinessUnit(employeeId: string, businessUnit: string): Promise<void> {
+  const supabase = getClient();
+  const { data, error } = await supabase
+    .from('employees')
+    .select('business_unit')
+    .eq('id', employeeId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (data && data.business_unit !== businessUnit) {
+    throw new Error('This employee belongs to a different business unit and cannot be modified here.');
+  }
+}
+
+async function assertArchiveInBusinessUnit(archiveId: string, businessUnit: string): Promise<void> {
+  const supabase = getClient();
+  const { data, error } = await supabase
+    .from('monthly_archives')
+    .select('business_unit')
+    .eq('id', archiveId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return;
+  if (data.business_unit !== businessUnit) {
+    throw new Error('This archive belongs to a different business unit.');
+  }
+}
+
 export async function loadComplianceRecords(businessUnit: string): Promise<ComplianceRecord[]> {
   const supabase = getClient();
 
@@ -107,6 +136,7 @@ export async function saveComplianceRecord(
   businessUnit: string
 ): Promise<void> {
   const supabase = getClient();
+  await assertEmployeeInBusinessUnit(record.employee.id, businessUnit);
 
   const { error: empError } = await supabase.from('employees').upsert({
     id: record.employee.id,
@@ -203,9 +233,14 @@ export async function createEmployeeRecord(
   return recordFromRows(emp as DbEmployee, (items ?? []) as DbComplianceItem[]);
 }
 
-export async function deleteEmployeeRecord(employeeId: string): Promise<void> {
+export async function deleteEmployeeRecord(employeeId: string, businessUnit: string): Promise<void> {
   const supabase = getClient();
-  const { error } = await supabase.from('employees').delete().eq('id', employeeId);
+  await assertEmployeeInBusinessUnit(employeeId, businessUnit);
+  const { error } = await supabase
+    .from('employees')
+    .delete()
+    .eq('id', employeeId)
+    .eq('business_unit', businessUnit);
   if (error) throw error;
 }
 
@@ -298,12 +333,13 @@ export async function saveArchive(
   };
 }
 
-export async function loadArchive(archiveId: string) {
+export async function loadArchive(archiveId: string, businessUnit: string) {
   const supabase = getClient();
   const { data, error } = await supabase
     .from('monthly_archives')
     .select('*, archive_snapshots(*)')
     .eq('id', archiveId)
+    .eq('business_unit', businessUnit)
     .maybeSingle();
 
   if (error) throw error;
@@ -328,8 +364,13 @@ export async function loadArchive(archiveId: string) {
   };
 }
 
-export async function deleteArchive(archiveId: string): Promise<void> {
+export async function deleteArchive(archiveId: string, businessUnit: string): Promise<void> {
   const supabase = getClient();
-  const { error } = await supabase.from('monthly_archives').delete().eq('id', archiveId);
+  await assertArchiveInBusinessUnit(archiveId, businessUnit);
+  const { error } = await supabase
+    .from('monthly_archives')
+    .delete()
+    .eq('id', archiveId)
+    .eq('business_unit', businessUnit);
   if (error) throw error;
 }

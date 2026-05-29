@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { MonthlyArchive, ComplianceRecord } from '../types/compliance';
 import { loadArchives, saveArchive, deleteArchive, loadArchive } from '../utils/storage';
+import type { BusinessUnitId } from '../constants/businessUnits';
 import { Archive, Download, Trash2, Eye, X, FileSpreadsheet, Mail } from 'lucide-react';
 import { Dashboard } from './Dashboard';
 import { EmailReportModal } from './EmailReportModal';
@@ -8,7 +9,7 @@ import { calculateComplianceRate } from '../utils/complianceCalculations';
 import * as XLSX from 'xlsx';
 
 interface ArchivesProps {
-  businessUnit: string;
+  businessUnit: BusinessUnitId;
   onSaveArchive: (month: string, year: number) => void;
 }
 
@@ -24,7 +25,9 @@ export function Archives({ businessUnit, onSaveArchive }: ArchivesProps) {
 
   useEffect(() => {
     loadArchivesList();
-  }, []);
+    setSelectedArchive(null);
+    setSelectedEmployee(null);
+  }, [businessUnit]);
 
   const loadArchivesList = async () => {
     try {
@@ -48,7 +51,7 @@ export function Archives({ businessUnit, onSaveArchive }: ArchivesProps) {
 
   const handleDeleteArchive = async (archiveId: string) => {
     if (confirm('Are you sure you want to delete this archive? This action cannot be undone.')) {
-      await deleteArchive(archiveId);
+      await deleteArchive(archiveId, businessUnit);
       await loadArchivesList();
       if (selectedArchive?.id === archiveId) {
         setSelectedArchive(null);
@@ -57,7 +60,7 @@ export function Archives({ businessUnit, onSaveArchive }: ArchivesProps) {
   };
 
   const handleViewArchive = async (archiveId: string) => {
-    const archive = await loadArchive(archiveId);
+    const archive = await loadArchive(archiveId, businessUnit);
     setSelectedArchive(archive);
     setSelectedEmployee(null);
   };

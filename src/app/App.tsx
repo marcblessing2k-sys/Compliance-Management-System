@@ -25,6 +25,7 @@ import { useInactivityTimeout } from './hooks/useInactivityTimeout';
 import { LayoutDashboard, ClipboardCheck, Archive, UserPlus, Users, Home, LogOut } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
 import type { AuthSession } from './types/auth';
+import { isBusinessUnitId, getBusinessUnitLabel, type BusinessUnitId } from './constants/businessUnits';
 import React from 'react';
 
 type Tab = 'dashboard' | 'checklist' | 'archives' | 'employees';
@@ -34,7 +35,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [authView, setAuthView] = useState<AuthView>('login');
-  const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
+  const [selectedSystem, setSelectedSystem] = useState<BusinessUnitId | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [records, setRecords] = useState<ComplianceRecord[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
@@ -55,7 +56,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  const loadRecords = useCallback(async (businessUnit: string) => {
+  const loadRecords = useCallback(async (businessUnit: BusinessUnitId) => {
     setRecordsLoading(true);
     try {
       const loaded = await loadComplianceRecords(businessUnit);
@@ -71,10 +72,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (session && session.user.role === 'admin' && selectedSystem) {
+    if (session && session.user.role !== 'admin' && selectedSystem) {
       loadRecords(selectedSystem);
     }
   }, [session, selectedSystem, loadRecords]);
+
+  const handleSelectSystem = (systemId: string) => {
+    if (!isBusinessUnitId(systemId)) return;
+    setSelectedSystem(systemId);
+    setActiveTab('dashboard');
+    setRecords([]);
+    setSelectedEmployeeId('all');
+    setCurrentRecord(null);
+  };
+
+  const handleBackToHome = () => {
+    setSelectedSystem(null);
+    setActiveTab('dashboard');
+    setRecords([]);
+    setSelectedEmployeeId('all');
+    setCurrentRecord(null);
+  };
 
   const handleEmployeeChange = (employeeId: string) => {
     setSelectedEmployeeId(employeeId);
@@ -183,7 +201,7 @@ export default function App() {
   const handleDeleteEmployee = async (employeeId: string) => {
     if (!selectedSystem) return;
     try {
-      await deleteEmployeeRecord(employeeId);
+      await deleteEmployeeRecord(employeeId, selectedSystem);
       const updatedRecords = records.filter(r => r.employee.id !== employeeId);
       setRecords(updatedRecords);
       if (currentRecord?.employee.id === employeeId) {
@@ -219,14 +237,8 @@ export default function App() {
     }
   };
 
-  const getSystemName = () => {
-    switch (selectedSystem) {
-      case 'BU1': return 'CMS-BU1-CONSULTING';
-      case 'BU2': return 'CMS-BU2-SOFTWARE DEVELOPMENT';
-      case 'BU3': return 'CMS-BU3-COOPERATIVE';
-      default: return 'Compliance Management System';
-    }
-  };
+  const getSystemName = () =>
+    selectedSystem ? getBusinessUnitLabel(selectedSystem) : 'Compliance Management System';
 
   if (authLoading) {
     return (
@@ -259,7 +271,7 @@ export default function App() {
         </>
       ) : !selectedSystem ? (
         <>
-          <LandingPage onSelectSystem={setSelectedSystem} />
+          <LandingPage onSelectSystem={handleSelectSystem} />
           {showWarning && (
             <InactivityWarning secondsRemaining={secondsRemaining} onExtend={extendSession} />
           )}
@@ -288,7 +300,7 @@ export default function App() {
                 <div className="flex items-center justify-between mb-4">
                   <h1 className="text-3xl font-bold">{getSystemName()}</h1>
                   <div className="flex gap-2">
-                    <button onClick={() => { setSelectedSystem(null); setActiveTab('dashboard'); }} className="bg-white/20 hover:bg-white/30 p-3 rounded-lg" title="Back to Home">
+                    <button onClick={handleBackToHome} className="bg-white/20 hover:bg-white/30 p-3 rounded-lg" title="Back to Home">
                       <Home size={22} />
                     </button>
                     <button onClick={handleLogout} className="bg-white/20 hover:bg-white/30 p-3 rounded-lg" title="Logout">

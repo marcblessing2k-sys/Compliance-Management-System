@@ -1,33 +1,34 @@
 import { ChevronRight } from 'lucide-react';
 import logoImage from '../../imports/majtech_vector_logo_3.png';
+import { BUSINESS_UNIT_IDS, BUSINESS_UNIT_LABELS, type BusinessUnitId } from '../constants/businessUnits';
 
 interface LandingPageProps {
-  onSelectSystem: (systemId: string) => void;
+  onSelectSystem: (systemId: BusinessUnitId) => void;
 }
 
-const systems = [
-  {
-    id: 'BU1',
-    name: 'CMS-BU1-CONSULTING',
+const systemMeta: Record<BusinessUnitId, { description: string; color: string; icon: string }> = {
+  BU1: {
     description: 'Consulting business unit compliance tracking and management',
     color: 'from-[#5B9BD5] to-[#4682B4]',
     icon: '📊'
   },
-  {
-    id: 'BU2',
-    name: 'CMS-BU2-SOFTWARE DEVELOPMENT',
+  BU2: {
     description: 'Software development business unit compliance tracking',
     color: 'from-[#FFE54D] to-[#FFD700]',
     icon: '💻'
   },
-  {
-    id: 'BU3',
-    name: 'CMS-BU3-COOPERATIVE',
+  BU3: {
     description: 'Cooperative business unit compliance tracking',
     color: 'from-[#87CEEB] to-[#5B9BD5]',
     icon: '🤝'
   }
-];
+};
+
+const systems = BUSINESS_UNIT_IDS.map(id => ({
+  id,
+  name: BUSINESS_UNIT_LABELS[id],
+  ...systemMeta[id]
+}));
 
 export function LandingPage({ onSelectSystem }: LandingPageProps) {
   return (
