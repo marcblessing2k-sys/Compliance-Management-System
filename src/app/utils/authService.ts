@@ -32,10 +32,25 @@ function mapProfile(row: ProfileRow): User {
   };
 }
 
+const AUTH_DEBUG = import.meta.env.DEV;
+
+function authDebug(step: string, detail?: Record<string, unknown>) {
+  if (AUTH_DEBUG) {
+    console.debug(`[auth] ${step}`, detail ?? '');
+  }
+}
+
 async function fetchProfile(userId: string): Promise<User | null> {
   const supabase = requireSupabase();
   const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
-  if (error || !data) return null;
+  if (error) {
+    authDebug('fetchProfile error', { userId, message: error.message });
+    return null;
+  }
+  if (!data) {
+    authDebug('fetchProfile missing', { userId });
+    return null;
+  }
   return mapProfile(data as ProfileRow);
 }
 
@@ -88,13 +103,48 @@ export async function deleteUser(userId: string): Promise<void> {
 export async function findUserByEmailOrPhone(identifier: string): Promise<User | null> {
   const supabase = requireSupabase();
   const trimmed = identifier.trim();
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .or(`email.eq.${trimmed},phone_number.eq.${trimmed},login_email.eq.${toLoginEmail(trimmed)}`)
-    .maybeSingle();
-  if (error || !data) return null;
-  return mapProfile(data as ProfileRow);
+  const { data, error } = await supabase.rpc('get_profile_for_login', {
+    p_identifier: trimmed
+  });
+
+  if (error) {
+    authDebug('findUserByEmailOrPhone rpc error', { message: error.message });
+    return null;
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return null;
+  return mapProfile(row as ProfileRow);
+}
+
+function formatSignInError(message: string, failedAttempts?: number): string {
+  const lower = message.toLowerCase();
+  if (lower.includes('invalid login credentials') || lower.includes('invalid credentials')) {
+    if (failedAttempts !== undefined && failedAttempts >= 2) {
+      return 'Account locked after 2 failed attempts. Please contact the administrator to reset your password.';
+    }
+    if (failedAttempts !== undefined && failedAttempts > 0) {
+      return `Invalid credentials. Attempts remaining: ${2 - failedAttempts}`;
+    }
+    return 'Invalid credentials';
+  }
+  if (lower.includes('email not confirmed')) {
+    return 'Email not confirmed. Check your inbox or contact your administrator.';
+  }
+  return message;
+}
+
+async function recordFailedLoginAttempt(loginEmail: string): Promise<number | undefined> {
+  const supabase = requireSupabase();
+  const { error } = await supabase.rpc('record_failed_login_attempt', {
+    p_login_email: loginEmail
+  });
+  if (error) {
+    authDebug('record_failed_login_attempt error', { message: error.message });
+    return undefined;
+  }
+  const profile = await findUserByEmailOrPhone(loginEmail);
+  return profile?.failedLoginAttempts;
 }
 
 export async function checkEmailOrPhoneExists(
@@ -102,16 +152,11 @@ export async function checkEmailOrPhoneExists(
   phoneNumber?: string,
   excludeUserId?: string
 ): Promise<boolean> {
-  const supabase = requireSupabase();
-  let query = supabase.from('profiles').select('id');
-  const filters: string[] = [];
-  if (email) filters.push(`email.eq.${email.toLowerCase()}`, `login_email.eq.${email.toLowerCase()}`);
-  if (phoneNumber) filters.push(`phone_number.eq.${phoneNumber}`);
-  if (!filters.length) return false;
-  query = query.or(filters.join(','));
-  const { data, error } = await query;
-  if (error) throw error;
-  return (data ?? []).some(u => u.id !== excludeUserId);
+  const identifier = email?.trim() || phoneNumber?.trim();
+  if (!identifier) return false;
+  const profile = await findUserByEmailOrPhone(identifier);
+  if (!profile) return false;
+  return excludeUserId ? profile.id !== excludeUserId : true;
 }
 
 export async function authenticateUser(
@@ -119,34 +164,54 @@ export async function authenticateUser(
   password: string
 ): Promise<{ user: User | null; error?: string }> {
   const supabase = requireSupabase();
-  const profile = await findUserByEmailOrPhone(identifier);
-
-  if (!profile) return { user: null, error: 'Invalid credentials' };
-  if (profile.status === 'inactive') return { user: null, error: 'Account is inactive' };
-  if (profile.isLocked) {
-    return { user: null, error: 'Account is locked. Please contact the administrator to reset your password.' };
-  }
-
   const loginEmail = await resolveLoginEmail(identifier);
-  const { error: signInError } = await supabase.auth.signInWithPassword({
+
+  authDebug('authenticateUser start', {
+    identifierType: identifier.includes('@') ? 'email' : 'phone',
+    loginEmailDomain: loginEmail.split('@')[1] ?? 'unknown'
+  });
+
+  // Authenticate with Supabase Auth first (works for anon).
+  // Profile is loaded after sign-in when RLS allows id = auth.uid().
+  const { data: authData, error: signInError } = await supabase.auth.signInWithPassword({
     email: loginEmail,
     password
   });
 
   if (signInError) {
-    const failedAttempts = (profile.failedLoginAttempts || 0) + 1;
-    const updatedUser: User = {
-      ...profile,
-      failedLoginAttempts: failedAttempts,
-      isLocked: failedAttempts >= 2
+    authDebug('signInWithPassword failed', { message: signInError.message });
+    const failedAttempts = await recordFailedLoginAttempt(loginEmail);
+    return {
+      user: null,
+      error: formatSignInError(signInError.message, failedAttempts)
     };
-    await saveUser(updatedUser);
-    await logActivity(profile.id, profile.name, 'Failed Login', `Failed login attempt (${failedAttempts}/2)`);
+  }
 
-    if (failedAttempts >= 2) {
-      return { user: null, error: 'Account locked after 2 failed attempts. Please contact the administrator to reset your password.' };
-    }
-    return { user: null, error: `Invalid credentials. Attempts remaining: ${2 - failedAttempts}` };
+  if (!authData.user) {
+    return { user: null, error: 'Invalid credentials' };
+  }
+
+  const profile = await fetchProfile(authData.user.id);
+  if (!profile) {
+    authDebug('profile missing after sign-in', { userId: authData.user.id });
+    await supabase.auth.signOut();
+    return {
+      user: null,
+      error: 'Account profile not found. Ask an administrator to verify your profile in Supabase.'
+    };
+  }
+
+  if (profile.status === 'inactive') {
+    await supabase.auth.signOut();
+    return { user: null, error: 'Account is inactive' };
+  }
+
+  if (profile.isLocked) {
+    await supabase.auth.signOut();
+    return {
+      user: null,
+      error: 'Account is locked. Please contact the administrator to reset your password.'
+    };
   }
 
   const resetUser: User = {
@@ -156,6 +221,7 @@ export async function authenticateUser(
     lastLogin: new Date().toISOString()
   };
   await saveUser(resetUser);
+  authDebug('authenticateUser success', { userId: profile.id, role: profile.role });
   return { user: resetUser };
 }
 
