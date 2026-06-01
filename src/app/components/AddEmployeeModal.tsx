@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import { ConsultantDetails } from '../types/compliance';
+import { EmployeeDetails } from '../types/compliance';
 
 interface AddEmployeeModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (employee: ConsultantDetails) => void;
+  onAdd: (employee: EmployeeDetails) => void;
 }
 
 export function AddEmployeeModal({ isOpen, onClose, onAdd }: AddEmployeeModalProps) {
@@ -26,7 +26,7 @@ export function AddEmployeeModal({ isOpen, onClose, onAdd }: AddEmployeeModalPro
       return;
     }
 
-    const newEmployee: ConsultantDetails = {
+    const newEmployee: EmployeeDetails = {
       id: `employee-${Date.now()}`,
       name: formData.name,
       role: formData.role,
