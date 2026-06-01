@@ -15,12 +15,15 @@ import { EditEmployeeModal } from './components/EditEmployeeModal';
 import { EmployeesList } from './components/EmployeesList';
 import { LandingPage } from './components/LandingPage';
 import { LoginPage } from './components/auth/LoginPage';
+import { SetNewPasswordModal } from './components/auth/SetNewPasswordModal';
 import { RegisterPage } from './components/auth/RegisterPage';
 import { AdminPortal } from './components/admin/AdminPortal';
 import { InactivityWarning } from './components/InactivityWarning';
 import { FloatingChat } from './components/FloatingChat';
 import { DatabaseConfigGuard } from './components/DatabaseConfigGuard';
-import { initializeAuth, getSession, logout, onAuthStateChange } from './utils/authService';
+import { getSession, logout, onAuthStateChange, detectPasswordRecoveryFromUrl } from './utils/authService';
+import { withTimeout, TimeoutError } from '../lib/withTimeout';
+import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { useInactivityTimeout } from './hooks/useInactivityTimeout';
 import { LayoutDashboard, ClipboardCheck, Archive, UserPlus, Users, Home, LogOut } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
@@ -35,6 +38,9 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [authView, setAuthView] = useState<AuthView>('login');
+  const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(() =>
+    detectPasswordRecoveryFromUrl()
+  );
   const [selectedSystem, setSelectedSystem] = useState<BusinessUnitId | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [records, setRecords] = useState<ComplianceRecord[]>([]);
@@ -46,25 +52,87 @@ export default function App() {
   const [employeeToEdit, setEmployeeToEdit] = useState<EmployeeDetails | null>(null);
 
   useEffect(() => {
-    initializeAuth().then(async () => {
-      const current = await getSession();
-      setSession(current);
-      setAuthLoading(false);
+    let cancelled = false;
+
+    (async () => {
+      try {
+        if (!isSupabaseConfigured) {
+          return;
+        }
+        const current = await withTimeout(
+          getSession(),
+          12_000,
+          'Connection timed out. Check your network or Supabase project status.'
+        );
+        if (!cancelled) {
+          setSession(current);
+        }
+      } catch (err) {
+        console.error('[auth] bootstrap failed', err);
+        if (!cancelled) {
+          setSession(null);
+          const message =
+            err instanceof TimeoutError
+              ? err.message
+              : err instanceof Error
+                ? err.message
+                : 'Failed to connect to the server';
+          toast.error(message);
+        }
+      } finally {
+        if (!cancelled) {
+          setAuthLoading(false);
+        }
+      }
+    })();
+
+    const { unsubscribe } = onAuthStateChange(next => {
+      if (!cancelled && !detectPasswordRecoveryFromUrl()) {
+        setSession(next);
+      }
     });
 
-    const { unsubscribe } = onAuthStateChange(setSession);
-    return () => unsubscribe();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    if (detectPasswordRecoveryFromUrl()) {
+      setPasswordRecoveryMode(true);
+    }
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange(event => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setPasswordRecoveryMode(true);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const loadRecords = useCallback(async (businessUnit: BusinessUnitId) => {
     setRecordsLoading(true);
     try {
-      const loaded = await loadComplianceRecords(businessUnit);
+      const loaded = await withTimeout(
+        loadComplianceRecords(businessUnit),
+        12_000,
+        'Loading compliance data timed out. Please try again.'
+      );
       setRecords(loaded);
       setSelectedEmployeeId('all');
       setCurrentRecord(null);
     } catch (err) {
-      toast.error((err as Error).message || 'Failed to load compliance records');
+      const message =
+        err instanceof TimeoutError
+          ? err.message
+          : (err as Error).message || 'Failed to load compliance records';
+      toast.error(message);
       setRecords([]);
     } finally {
       setRecordsLoading(false);
@@ -240,10 +308,26 @@ export default function App() {
   const getSystemName = () =>
     selectedSystem ? getBusinessUnitLabel(selectedSystem) : 'Compliance Management System';
 
+  if (passwordRecoveryMode) {
+    return (
+      <DatabaseConfigGuard>
+        <Toaster position="top-right" />
+        <SetNewPasswordModal
+          onComplete={() => {
+            setPasswordRecoveryMode(false);
+            setSession(null);
+            setAuthView('login');
+          }}
+        />
+      </DatabaseConfigGuard>
+    );
+  }
+
   if (authLoading) {
     return (
-      <div className="h-screen flex items-center justify-center">
+      <div className="h-screen flex flex-col items-center justify-center gap-4">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
+        <p className="text-gray-600 text-sm">Connecting to Compliance Management System...</p>
       </div>
     );
   }

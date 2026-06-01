@@ -259,40 +259,32 @@ export function PasswordResetRequests({ session }: { session: AuthSession }) {
 }
 
 function ApproveModal({ request, session, onClose, onSuccess }: { request: PasswordResetRequest; session: AuthSession; onClose: () => void; onSuccess: () => void }) {
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [approved, setApproved] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setLoading(true);
 
-    if (!newPassword || !confirmPassword) {
-      setError('Please fill in all fields');
-      return;
-    }
-    if (newPassword.length < 6) {
-      setError('Password must be at least 6 characters');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setError('Passwords do not match');
-      return;
-    }
+    try {
+      const result = await approvePasswordResetRequest(
+        request.id,
+        session.user.id,
+        session.user.name
+      );
 
-    const result = await approvePasswordResetRequest(
-      request.id,
-      newPassword,
-      session.user.id,
-      session.user.name
-    );
-
-    if (result.success) {
-      setShowPassword(true);
-      toast.success('Password reset approved successfully');
-    } else {
-      setError(result.message);
+      if (result.success) {
+        setSuccessMessage(result.message);
+        setApproved(true);
+        toast.success('Password reset approved');
+      } else {
+        setError(result.message);
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -309,30 +301,12 @@ function ApproveModal({ request, session, onClose, onSuccess }: { request: Passw
           </div>
         </div>
 
-        {!showPassword ? (
+        {!approved ? (
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-semibold mb-2">New Password</label>
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                placeholder="Minimum 6 characters"
-                autoFocus
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold mb-2">Confirm Password</label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                placeholder="Re-enter password"
-              />
-            </div>
+            <p className="text-sm text-gray-600">
+              This will unlock the user&apos;s account and email them a link to set a new password. They choose the
+              password themselves — you do not need to enter one here.
+            </p>
 
             {error && (
               <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
@@ -343,9 +317,10 @@ function ApproveModal({ request, session, onClose, onSuccess }: { request: Passw
             <div className="flex gap-3 pt-4">
               <button
                 type="submit"
-                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg font-semibold"
+                disabled={loading}
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg font-semibold disabled:opacity-50"
               >
-                Approve & Set Password
+                {loading ? 'Sending...' : 'Approve & Send Reset Email'}
               </button>
               <button
                 type="button"
@@ -360,12 +335,7 @@ function ApproveModal({ request, session, onClose, onSuccess }: { request: Passw
           <div className="space-y-4">
             <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
               <p className="text-sm font-semibold text-green-900 mb-2">Password reset approved successfully!</p>
-              <p className="text-sm text-green-800 mb-3">
-                Please communicate this password to <strong>{request.userName}</strong>:
-              </p>
-              <div className="bg-white p-3 rounded border border-green-300">
-                <p className="text-lg font-mono font-bold text-center text-green-900">{newPassword}</p>
-              </div>
+              <p className="text-sm text-green-800">{successMessage}</p>
             </div>
 
             <button

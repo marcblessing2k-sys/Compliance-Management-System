@@ -286,12 +286,12 @@ function ResetPasswordModal({ user, onClose, onSuccess }: { user: User; onClose:
       return;
     }
 
-    const success = await resetUserPassword(user.id, newPassword);
-    if (success) {
-      toast.success(`Password reset successfully for ${user.name}. Account unlocked.`);
+    const result = await resetUserPassword(user.id, newPassword);
+    if (result.success) {
+      toast.success(result.message);
       onSuccess();
     } else {
-      setError('Failed to reset password. Deploy the admin-users Edge Function (see DATABASE_SETUP.md).');
+      setError(result.message);
     }
   };
 

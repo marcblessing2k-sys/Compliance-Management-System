@@ -42,9 +42,14 @@ function authDebug(step: string, detail?: Record<string, unknown>) {
 
 async function fetchProfile(userId: string): Promise<User | null> {
   const supabase = requireSupabase();
-  const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .maybeSingle();
+
   if (error) {
-    authDebug('fetchProfile error', { userId, message: error.message });
+    authDebug('fetchProfile error', { userId, message: error.message, code: error.code });
     return null;
   }
   if (!data) {
@@ -325,12 +330,30 @@ export async function createSession(user: User): Promise<AuthSession> {
 
 export async function getSession(): Promise<AuthSession | null> {
   if (!isSupabaseConfigured) return null;
+  if (isPasswordRecoveryUrl()) {
+    authDebug('getSession skipped — password recovery in progress');
+    return null;
+  }
+
   const supabase = requireSupabase();
-  const { data: { session } } = await supabase.auth.getSession();
+
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) {
+    authDebug('getSession error', { message: sessionError.message });
+    return null;
+  }
   if (!session) return null;
 
   const profile = await fetchProfile(session.user.id);
-  if (!profile || profile.status === 'inactive') return null;
+  if (!profile) {
+    authDebug('getSession profile missing — signing out stale session', { userId: session.user.id });
+    await supabase.auth.signOut();
+    return null;
+  }
+  if (profile.status === 'inactive') {
+    await supabase.auth.signOut();
+    return null;
+  }
 
   return {
     user: profile,
@@ -401,18 +424,202 @@ export function clearRememberMe(): void {
   localStorage.removeItem(REMEMBER_ME_KEY);
 }
 
-export async function resetUserPassword(userId: string, newPassword: string): Promise<boolean> {
+export type ResetPasswordResult = {
+  success: boolean;
+  message: string;
+  method?: 'edge-function' | 'email';
+};
+
+async function invokeAdminUsers(
+  body: Record<string, unknown>
+): Promise<{ ok: boolean; error?: string }> {
   const supabase = requireSupabase();
-  const { error } = await supabase.functions.invoke('admin-users', {
-    body: { action: 'reset-password', userId, newPassword }
-  });
-  if (error) return false;
+  const { data, error } = await supabase.functions.invoke('admin-users', { body });
+
+  if (error) {
+    const msg = error.message ?? '';
+    const notDeployed =
+      msg.includes('Failed to send a request to the Edge Function') ||
+      msg.includes('Function not found') ||
+      msg.includes('404');
+    return {
+      ok: false,
+      error: notDeployed
+        ? 'admin-users Edge Function is not deployed'
+        : msg
+    };
+  }
+
+  const payload = data as { success?: boolean; error?: string } | null;
+  if (payload?.error) return { ok: false, error: payload.error };
+  if (payload?.success) return { ok: true };
+  return { ok: false, error: 'Unexpected response from admin-users' };
+}
+
+async function unlockUserProfile(userId: string): Promise<void> {
+  const supabase = requireSupabase();
+  const { error: rpcError } = await supabase.rpc('admin_unlock_user_profile', { p_user_id: userId });
+
+  if (!rpcError) return;
 
   const user = (await getUsers()).find(u => u.id === userId);
   if (user) {
-    await saveUser({ ...user, failedLoginAttempts: 0, isLocked: false });
+    await saveUser({ ...user, failedLoginAttempts: 0, isLocked: false, status: 'active' });
   }
-  return true;
+}
+
+export async function sendUserPasswordResetEmail(userId: string): Promise<ResetPasswordResult> {
+  const supabase = requireSupabase();
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('login_email, email')
+    .eq('id', userId)
+    .single();
+
+  if (error || !data?.login_email) {
+    return { success: false, message: 'Could not find this user’s login email.' };
+  }
+
+  await unlockUserProfile(userId);
+
+  const redirectTo = `${window.location.origin}/`;
+  const { error: resetError } = await supabase.auth.resetPasswordForEmail(data.login_email, {
+    redirectTo
+  });
+
+  if (resetError) {
+    return { success: false, message: resetError.message };
+  }
+
+  const displayEmail = data.email ?? data.login_email;
+  return {
+    success: true,
+    method: 'email',
+    message: `Password reset link sent to ${displayEmail}. The account has been unlocked.`
+  };
+}
+
+export async function resetUserPassword(userId: string, newPassword: string): Promise<ResetPasswordResult> {
+  if (newPassword.length < 6) {
+    return { success: false, message: 'Password must be at least 6 characters.' };
+  }
+
+  const edge = await invokeAdminUsers({ action: 'reset-password', userId, newPassword });
+  if (edge.ok) {
+    await unlockUserProfile(userId);
+    return {
+      success: true,
+      method: 'edge-function',
+      message: 'Password updated successfully. Account unlocked.'
+    };
+  }
+
+  authDebug('reset-password edge function failed, using email fallback', { error: edge.error });
+  const emailResult = await sendUserPasswordResetEmail(userId);
+  if (!emailResult.success) {
+    return {
+      success: false,
+      message:
+        emailResult.message ||
+        `Could not set password directly (${edge.error ?? 'Edge Function unavailable'}).`
+    };
+  }
+
+  return {
+    success: true,
+    method: 'email',
+    message: `${emailResult.message} (Direct password set requires deploying the admin-users Edge Function.)`
+  };
+}
+
+function isPasswordRecoveryUrl(): boolean {
+  if (typeof window === 'undefined') return false;
+  const hash = window.location.hash.startsWith('#')
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+  if (!hash) return false;
+  return new URLSearchParams(hash).get('type') === 'recovery';
+}
+
+/** True when the browser has a Supabase password-recovery link in the URL hash. */
+export function detectPasswordRecoveryFromUrl(): boolean {
+  return isPasswordRecoveryUrl();
+}
+
+/**
+ * Forgot password for all users via Supabase Auth (reset email + unlock).
+ * Does not use password_reset_requests (avoids RLS errors for logged-out users).
+ */
+export async function requestForgotPassword(
+  identifier: string,
+  contactMethod: 'email' | 'phone'
+): Promise<{ success: boolean; message: string }> {
+  const user = await findUserByEmailOrPhone(identifier);
+  if (!user) {
+    return { success: false, message: 'No account found with this email or phone number.' };
+  }
+
+  if (user.role === 'admin' && contactMethod !== 'email') {
+    return {
+      success: false,
+      message: 'Administrator accounts must use email for password reset.'
+    };
+  }
+
+  const supabase = requireSupabase();
+  const loginEmail = await resolveLoginEmail(identifier);
+
+  const unlockRpc =
+    user.role === 'admin' ? 'prepare_admin_password_reset' : 'prepare_user_password_reset';
+
+  const { data: unlocked, error: unlockError } = await supabase.rpc(unlockRpc, {
+    p_identifier: identifier.trim()
+  });
+
+  if (unlockError) {
+    authDebug(`${unlockRpc} error`, { message: unlockError.message });
+    return {
+      success: false,
+      message:
+        'Could not unlock account. Run migration 006_user_password_reset_via_auth.sql in the Supabase SQL Editor.'
+    };
+  }
+
+  if (!unlocked) {
+    return { success: false, message: 'No account found with this email or phone number.' };
+  }
+
+  const redirectTo = `${window.location.origin}/`;
+  const { error } = await supabase.auth.resetPasswordForEmail(loginEmail, { redirectTo });
+
+  if (error) {
+    return { success: false, message: error.message };
+  }
+
+  const contactHint =
+    contactMethod === 'email' ? user.email ?? loginEmail : user.phoneNumber ?? identifier;
+
+  return {
+    success: true,
+    message: `Your account has been unlocked. Check ${contactHint} for a password reset link from Supabase, then open it to set a new password.`
+  };
+}
+
+export async function updatePasswordAfterRecovery(newPassword: string): Promise<{ success: boolean; message: string }> {
+  if (newPassword.length < 6) {
+    return { success: false, message: 'Password must be at least 6 characters.' };
+  }
+
+  const supabase = requireSupabase();
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+
+  if (error) {
+    return { success: false, message: error.message };
+  }
+
+  await supabase.auth.signOut();
+  window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  return { success: true, message: 'Password updated successfully. You can now sign in.' };
 }
 
 export async function createPasswordResetRequest(
@@ -472,7 +679,6 @@ export async function getPasswordResetRequests(): Promise<PasswordResetRequest[]
 
 export async function approvePasswordResetRequest(
   requestId: string,
-  newPassword: string,
   adminId: string,
   adminName: string
 ): Promise<{ success: boolean; message: string }> {
@@ -481,9 +687,9 @@ export async function approvePasswordResetRequest(
   if (!request) return { success: false, message: 'Request not found.' };
   if (request.status !== 'pending') return { success: false, message: 'Request has already been processed.' };
 
-  const resetSuccess = await resetUserPassword(request.userId, newPassword);
-  if (!resetSuccess) {
-    return { success: false, message: 'Failed to reset password. Ensure the admin-users Edge Function is deployed.' };
+  const resetResult = await sendUserPasswordResetEmail(request.userId);
+  if (!resetResult.success) {
+    return { success: false, message: resetResult.message };
   }
 
   const supabase = requireSupabase();
@@ -494,9 +700,14 @@ export async function approvePasswordResetRequest(
   }).eq('id', requestId);
 
   await logActivity(adminId, adminName, 'Approve Password Reset', `Approved password reset for ${request.userName}`);
-  await logActivity(request.userId, request.userName, 'Password Reset', 'Password reset approved by admin');
+  await logActivity(
+    request.userId,
+    request.userName,
+    'Password Reset',
+    'Password reset approved by admin — check your email for the reset link'
+  );
 
-  return { success: true, message: `Password reset approved for ${request.userName}. New password: ${newPassword}` };
+  return { success: true, message: resetResult.message };
 }
 
 export async function denyPasswordResetRequest(

@@ -1,0 +1,5 @@
+# Minimal Supabase project config for deploying Edge Functions.
+# See https://supabase.com/docs/guides/cli/config
+
+[functions.admin-users]
+verify_jwt = true

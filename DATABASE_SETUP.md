@@ -60,6 +60,19 @@ In **Authentication → Providers → Email**:
 
 For production, enable email confirmation and configure SMTP under **Project Settings → Auth**.
 
+Under **Authentication → URL Configuration**, set:
+
+| Setting | Value |
+|---------|--------|
+| Site URL | `http://localhost:5173` (dev) or your production URL |
+| Redirect URLs | Same URL(s) — required for admin **Forgot Password** reset emails |
+
+Also run `supabase/migrations/004_admin_self_password_reset.sql` in the SQL Editor (unlocks locked admin accounts when they use Forgot Password).
+
+**Forgot password (all users):** On the login screen, use **Forgot Password** with your email or phone. Supabase emails a reset link; locked accounts are unlocked via `prepare_user_password_reset` (migration `006`). Open the link → **Set New Password** → sign in. This does **not** use `password_reset_requests` (no RLS errors for logged-out users).
+
+Run migrations through `006_user_password_reset_via_auth.sql` in the SQL Editor.
+
 ---
 
 ## Step 5 — Create the first admin user
@@ -90,7 +103,9 @@ update public.profiles set role = 'admin' where login_email = 'your@email.com';
 
 ## Step 6 — Deploy the admin Edge Function (required for admin user management)
 
-Admin actions (create user, reset password, delete user) require the **service role key**, which must never be exposed in the browser. These run via a Supabase Edge Function.
+Admin actions **create user** and **delete user** require the **service role key**, which must never be exposed in the browser. These run via a Supabase Edge Function.
+
+**Password reset** works without the Edge Function: the app emails the user a Supabase reset link and unlocks their account. Deploy the function only if you need admins to **set an exact password** from User Management (otherwise the UI falls back to email).
 
 ### Prerequisites
 
@@ -191,7 +206,8 @@ Selecting BU1, BU2, or BU3 on the landing page now loads employees tagged with t
 |-------|-----|
 | “Database Not Configured” screen | Create `.env` with both `VITE_*` vars and restart dev server |
 | Login works but no data loads | Check RLS policies ran; verify user `status = 'active'` in `profiles` |
-| Admin can’t create/reset users | Deploy `admin-users` Edge Function (Step 6) |
+| Admin can’t create/delete users | Deploy `admin-users` Edge Function (Step 6) |
+| “Failed to reset password” / Edge Function | Password reset now **emails a reset link** automatically if the function isn’t deployed. Run migration `005_admin_password_reset_helpers.sql`. For **setting a specific password** in the admin UI, deploy the Edge Function. |
 | Phone login fails | Ensure `phone_number` is set on the profile row |
 | `403` on data queries | User may be inactive or locked; check `profiles` table |
 
