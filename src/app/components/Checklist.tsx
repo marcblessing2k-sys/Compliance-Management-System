@@ -25,7 +25,7 @@ export function Checklist({ items, onUpdate, employeeName, record }: ChecklistPr
   const [showImportPreview, setShowImportPreview] = useState(false);
   const [importedItems, setImportedItems] = useState<ComplianceItem[]>([]);
 
-  const statuses: Array<'All' | ComplianceStatus> = ['All', 'Compliant', 'In Progress', 'Not Started', 'Non-Compliant', 'N/A'];
+  const statuses: Array<'All' | ComplianceStatus> = ['All', 'Compliant', 'In Progress', 'Non-Compliant', 'N/A'];
 
   // Group items by business process
   const groupedItems: Record<string, ComplianceItem[]> = {};
@@ -80,7 +80,6 @@ export function Checklist({ items, onUpdate, employeeName, record }: ChecklistPr
     switch (status) {
       case 'Compliant': return 'bg-green-100 text-green-800';
       case 'In Progress': return 'bg-blue-100 text-blue-800';
-      case 'Not Started': return 'bg-gray-100 text-gray-800';
       case 'Non-Compliant': return 'bg-red-100 text-red-800';
       case 'N/A': return 'bg-gray-100 text-gray-600';
     }
