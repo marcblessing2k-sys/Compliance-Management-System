@@ -228,7 +228,7 @@ This project includes a GitHub workflow at `.github/workflows/supabase-deploy.ym
 1. In GitHub repository settings, add the following secrets:
    - `SUPABASE_ACCESS_TOKEN` — a Supabase CLI access token
    - `SUPABASE_PROJECT_REF` — your Supabase project ref
-2. The workflow builds the app, then runs `supabase db push` and `supabase functions deploy admin-users`.
+2. The workflow builds the app, publishes the frontend to GitHub Pages, then runs `supabase db push` and `supabase functions deploy admin-users`.
 3. The workflow triggers on push to `main` and can also be run manually.
 
 > Do not store `SUPABASE_SERVICE_ROLE_KEY` in the frontend repository. It belongs only in Supabase Edge Function environment variables or in the Supabase project settings.
