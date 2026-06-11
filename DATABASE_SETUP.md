@@ -220,3 +220,15 @@ Selecting BU1, BU2, or BU3 on the landing page now loads employees tagged with t
 3. Set up Supabase database backups (enabled by default on paid plans).
 4. Rotate the service role key if ever exposed.
 5. Add Supabase Realtime subscriptions for live chat updates (optional enhancement).
+
+## Step 8 — GitHub Actions deployment
+
+This project includes a GitHub workflow at `.github/workflows/supabase-deploy.yml`.
+
+1. In GitHub repository settings, add the following secrets:
+   - `SUPABASE_ACCESS_TOKEN` — a Supabase CLI access token
+   - `SUPABASE_PROJECT_REF` — your Supabase project ref
+2. The workflow builds the app, then runs `supabase db push` and `supabase functions deploy admin-users`.
+3. The workflow triggers on push to `main` and can also be run manually.
+
+> Do not store `SUPABASE_SERVICE_ROLE_KEY` in the frontend repository. It belongs only in Supabase Edge Function environment variables or in the Supabase project settings.

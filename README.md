@@ -9,7 +9,13 @@
   2. Copy `.env.example` to `.env` and fill in your Supabase URL and anon key.
   3. Run `npm install` then `npm run dev`.
 
-  ## Stack
+## GitHub CI / Supabase deploy
 
-  - React + Vite + Tailwind
-  - Supabase (PostgreSQL + Auth + Edge Functions)
+This repository includes a GitHub Actions workflow at `.github/workflows/supabase-deploy.yml`.
+
+Required GitHub repository secrets:
+- `SUPABASE_ACCESS_TOKEN` — Supabase CLI access token
+- `SUPABASE_PROJECT_REF` — Supabase project reference
+
+The workflow builds the app, runs `supabase db push`, and deploys the `admin-users` Edge Function on push to `main` or when manually triggered.
+
