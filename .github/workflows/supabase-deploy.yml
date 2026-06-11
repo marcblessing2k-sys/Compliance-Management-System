@@ -51,6 +51,16 @@ jobs:
             exit 1
           fi
           supabase link --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Run admin-repair SQL (restore admin access)
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          if [ -f supabase/scripts/repair_admin_access.sql ]; then
+            supabase db query --file supabase/scripts/repair_admin_access.sql
+          else
+            echo "repair_admin_access.sql not found"
+            exit 1
+          fi
       - name: Deploy database schema
         run: supabase db push
       - name: Deploy admin Edge Function
